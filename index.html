@@ -2855,15 +2855,21 @@ var ACTU_CAT_COLORS={
   ASTRONOMIE:{bg:'rgba(138,43,226,.1)', border:'rgba(138,43,226,.3)',  color:'#b06aff'},
   PHILOSOPHIE:{bg:'rgba(0,200,150,.08)',border:'rgba(0,200,150,.25)',  color:'#00c896'},
   TECH:     {bg:'rgba(0,229,255,.08)',  border:'rgba(0,229,255,.25)',  color:'#00e5ff'},
-  SCIENCE:  {bg:'rgba(255,182,193,.08)',border:'rgba(255,182,193,.25)',color:'#ffb6c1'}
+  SCIENCE:  {bg:'rgba(255,182,193,.08)',border:'rgba(255,182,193,.25)',color:'#ffb6c1'},
+  SPORT:    {bg:'rgba(0,200,100,.08)',  border:'rgba(0,200,100,.25)',  color:'#00c864'},
+  POLITIQUE:{bg:'rgba(255,60,60,.08)', border:'rgba(255,60,60,.25)',  color:'#ff3c3c'},
+  DIVERTISSEMENT:{bg:'rgba(255,165,0,.08)',border:'rgba(255,165,0,.25)',color:'#ffa500'},
+  SANTE:    {bg:'rgba(100,200,255,.08)',border:'rgba(100,200,255,.25)',color:'#64c8ff'}
 };
 var ACTU_CATS=[
   {key:'MONDE',icon:'🗺️',label:'Monde'},
-  {key:'LOIS',icon:'⚖️',label:'Lois'},
-  {key:'ASTRONOMIE',icon:'🔭',label:'Astro'},
-  {key:'PHILOSOPHIE',icon:'🧠',label:'Philo'},
   {key:'TECH',icon:'💻',label:'Tech'},
-  {key:'SCIENCE',icon:'🔬',label:'Science'}
+  {key:'SPORT',icon:'⚽',label:'Sport'},
+  {key:'POLITIQUE',icon:'🏛️',label:'Politique'},
+  {key:'DIVERTISSEMENT',icon:'🎬',label:'Divert.'},
+  {key:'SCIENCE',icon:'🔬',label:'Science'},
+  {key:'LOIS',icon:'⚖️',label:'Lois'},
+  {key:'PHILOSOPHIE',icon:'🧠',label:'Philo'},
 ];
 
 function initActu(){
@@ -2880,7 +2886,7 @@ function initActu(){
   }catch(e){}
   try{
     var cache=JSON.parse(localStorage.getItem('ms_actu_cache3')||'null');
-    if(cache&&cache.v===4&&cache.date===new Date().toISOString().split('T')[0]&&cache.articles&&cache.articles.length>0){
+    if(cache&&cache.v===5&&cache.date===new Date().toISOString().split('T')[0]&&cache.articles&&cache.articles.length>0){
       actuAllArticles=cache.articles;actuQuizData=cache.quiz||[];
       renderActuArticles(actuAllArticles);actuLoaded=true;return;
     }
@@ -2950,9 +2956,41 @@ function loadActu(forceRefresh){
   var btn=document.getElementById('actuRefreshBtn');
   if(btn)btn.classList.add('loading');
   var el=document.getElementById('actuContent');
-  el.innerHTML='<div class="actu-loading"><div class="actu-spinner"></div><div class="actu-loading-txt">Connexion aux sources...</div><div class="actu-loading-sub">Le Monde, TechCrunch, NASA, France24\u2026</div></div>';
+  el.innerHTML='<div class="actu-loading"><div class="actu-spinner"></div><div class="actu-loading-txt">Connexion NewsAPI...</div><div class="actu-loading-sub">Tech · Sport · Politique · Divertissement · Sciences\u2026</div></div>';
 
-  // 4 sources vari\u00E9es : 1 MONDE + 1 TECH + 1 ASTRO/SCIENCE + 1 bonus
+  // ── 1. Essayer NewsAPI via le Worker ─────────────────────────────
+  var newsUrl=CLAUDE_WORKER_URL+'/news?cat=tech,sport,politique,divertissement,monde,science&max=5';
+  var done=false;
+  var timer=setTimeout(function(){
+    if(!done){done=true;actuLoading=false;if(btn)btn.classList.remove('loading');
+      // Fallback RSS si NewsAPI timeout
+      loadActuRSS(el);}
+  },10000);
+
+  fetch(newsUrl)
+    .then(function(r){return r.ok?r.json():Promise.reject(r.status);})
+    .then(function(d){
+      if(done)return;done=true;clearTimeout(timer);
+      actuLoading=false;if(btn)btn.classList.remove('loading');
+      if(d.articles&&d.articles.length>0){
+        applyActus(d.articles,'newsapi');
+      }else{
+        loadActuRSS(el);
+      }
+    })
+    .catch(function(){
+      if(done)return;done=true;clearTimeout(timer);
+      actuLoading=false;if(btn)btn.classList.remove('loading');
+      loadActuRSS(el);
+    });
+}
+
+function loadActuRSS(el){
+  // Fallback RSS si NewsAPI échoue
+  actuLoading=true;
+  var btn=document.getElementById('actuRefreshBtn');
+  if(btn)btn.classList.add('loading');
+  if(el)el.innerHTML='<div class="actu-loading"><div class="actu-spinner"></div><div class="actu-loading-txt">Connexion RSS...</div><div class="actu-loading-sub">Le Monde, TechCrunch, France24\u2026</div></div>';
   var picks=[
     RSS_SOURCES[Math.random()<.5?0:1],
     RSS_SOURCES[Math.random()<.5?2:3],
@@ -2960,12 +2998,10 @@ function loadActu(forceRefresh){
     RSS_SOURCES[6]
   ];
   var done=0;var collected=[];var finished=false;
-
   var master=setTimeout(function(){
     if(!finished){finished=true;actuLoading=false;if(btn)btn.classList.remove('loading');
       finishActu(collected.length?collected:null,el);}
   },13000);
-
   picks.forEach(function(src){
     fetchRSS(src.url,function(err,xml){
       done++;
@@ -2981,22 +3017,24 @@ function loadActu(forceRefresh){
 
 function applyActus(articles, source){
   var today=new Date().toISOString().split('T')[0];
-  var brief='Actus IA \u2014 '+new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})+' \uD83C\uDF0D';
-  if(source==='rss')brief='Actus du jour : Le Monde, TechCrunch, NASA \u2014 '+new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})+' \uD83C\uDF0D';
-  if(source==='fallback')brief=ACTU_FALLBACK.brief;
+  var brief;
+  if(source==='newsapi') brief='📡 NewsAPI — Actus en direct · '+new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})+' 🌍';
+  else if(source==='rss') brief='Actus du jour : Le Monde, TechCrunch, NASA — '+new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})+' 🌍';
+  else if(source==='fallback') brief=ACTU_FALLBACK.brief;
+  else brief='Actus IA — '+new Date().toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})+' 🌍';
   try{localStorage.setItem('ms_actu_brief',brief);}catch(x){}
   var bt=document.getElementById('actuBriefText');if(bt)bt.textContent=brief;
   var br=document.getElementById('actuBrief');if(br)br.style.display='block';
   actuQuizData=ACTU_FALLBACK.quiz;
   actuAllArticles=articles;
-  if(source!=='fallback'){try{localStorage.setItem('ms_actu_cache3',JSON.stringify({date:today,v:4,articles:actuAllArticles,quiz:actuQuizData,src:source}));}catch(x){}}
+  if(source!=='fallback'){try{localStorage.setItem('ms_actu_cache3',JSON.stringify({date:today,v:5,articles:actuAllArticles,quiz:actuQuizData,src:source}));}catch(x){}}
   actuLoaded=true;actuCurrentFilter='all';
   document.querySelectorAll('.actu-filter').forEach(function(b){b.classList.toggle('active',b.getAttribute('data-cat')==='all');});
   renderActuArticles(actuAllArticles);
   if(source==='fallback'){
     var info=document.createElement('div');
     info.style.cssText='text-align:center;font-size:10px;color:rgba(255,107,53,.7);letter-spacing:2px;padding:6px 0 10px;';
-    info.textContent='\uD83D\uDCE1 HORS-LIGNE \u2014 Appuie sur \u27F3 avec internet';
+    info.textContent='📡 HORS-LIGNE — Appuie sur ⟳ avec internet';
     var c=document.getElementById('actuContent');if(c)c.insertBefore(info,c.firstChild);
   }
 }
